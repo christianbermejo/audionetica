@@ -133,6 +133,95 @@ def translate_text(text_to_translate, target_llm_code, source_llm_code=None):
     except Exception as e:
         # st.error(f"Error during translation with {model_name}: {e}")
         return text_to_translate
+
+
+def speak_transcription(
+    text_to_speak: str,
+    target_gtts_code: str,
+    target_llm_code: str,
+    source_llm_code: str,
+    output_device_name: str,
+    pyaudio_instance: pyaudio.PyAudio,
+    translations_enabled: bool,
+    source_lang_display_name: str,
+    tts_target_lang_display: str
+):
+    """
+    Handles text-to-speech conversion and audio playback, including optional translation.
+    """
+    final_text_to_speak = text_to_speak
+
+    if translations_enabled and source_llm_code != target_llm_code:
+        with st.spinner(f"Translating from {source_lang_display_name} to {tts_target_lang_display}..."):
+            final_text_to_speak = translate_text(text_to_speak, target_llm_code, source_llm_code)
+            if final_text_to_speak == text_to_speak: # Translation might have failed or returned original
+                st.warning(f"Translation from {source_lang_display_name} to {tts_target_lang_display} did not change the text. Speaking original or partially translated text.")
+
+
+    if not final_text_to_speak or not final_text_to_speak.strip():
+        st.warning("No text available to speak after potential translation.")
+        return
+
+    try:
+        with st.spinner(f"Generating speech in {tts_target_lang_display}..."):
+            tts = gTTS(text=final_text_to_speak, lang=target_gtts_code, slow=False)
+            mp3_fp = io.BytesIO()
+            tts.write_to_fp(mp3_fp)
+            mp3_fp.seek(0)
+
+        output_device_index = None
+        use_custom_playback = False
+
+        # Use the passed output_device_name argument
+        current_output_device_name = output_device_name
+
+        if current_output_device_name and current_output_device_name != "Default":
+            st.info(f"Attempting to play audio through: {current_output_device_name}")
+            try:
+                all_devices_info = [pyaudio_instance.get_device_info_by_index(i) for i in range(pyaudio_instance.get_device_count())]
+                output_device_details = next((d for d in all_devices_info if d['name'] == current_output_device_name and d['maxOutputChannels'] > 0), None)
+
+                if not output_device_details:
+                    st.warning(f"Selected output device '{current_output_device_name}' not found or not an output device. Falling back to default.")
+                else:
+                    output_device_index = output_device_details['index']
+                    use_custom_playback = True
+            except Exception as e:
+                st.error(f"Error identifying output device '{current_output_device_name}': {e}. Falling back to default.")
+
+        if use_custom_playback and output_device_index is not None:
+            try:
+                audio_segment = AudioSegment.from_file(mp3_fp, format="mp3")
+
+                playback_stream = pyaudio_instance.open(format=pyaudio_instance.get_format_from_width(audio_segment.sample_width),
+                                                 channels=audio_segment.channels,
+                                                 rate=audio_segment.frame_rate,
+                                                 output=True,
+                                                 output_device_index=output_device_index)
+
+                playback_stream.write(audio_segment.raw_data)
+
+                playback_stream.stop_stream()
+                playback_stream.close()
+                st.success(f"Played audio through: {current_output_device_name}")
+                st.success(f"Speaking: {final_text_to_speak}")
+
+            except Exception as e:
+                st.error(f"Could not play audio on {current_output_device_name}: {e}. Falling back to default.")
+                mp3_fp.seek(0) # Reset buffer for st.audio
+                # Fallback to st.audio if custom playback fails
+                st.audio(mp3_fp, format='audio/mp3')
+                st.success(f"Speaking (default output): {final_text_to_speak}")
+        else:
+            if current_output_device_name and current_output_device_name != "Default":
+                st.warning("Playing through default output device.")
+            mp3_fp.seek(0)
+            st.audio(mp3_fp, format='audio/mp3')
+            st.success(f"Speaking: {final_text_to_speak}")
+
+    except Exception as e:
+        st.error(f"Error generating or playing speech: {e}")
+
     
 
 # Load Whisper model and processor
@@ -229,102 +318,10 @@ st.write("It will speak according the voice of provided by gTTS for the language
 # Use the same language for the audio as the transcribed language
 tts_target_lang_display = language
 # tts_target_lang_display = st.selectbox("Translate & Speak in", options=["English", "Tagalog", "Korean"], index=0)
-speak_button = st.button("Translate and Speak Latest Transcription")
+# speak_button = st.button("Translate and Speak Latest Transcription") # Removed
 
-if speak_button:
-    if st.session_state.get("transcriptions"):
-        all_transcriptions = st.session_state["transcriptions"].strip().split('\n')
-        latest_transcription_text = ""
-        if all_transcriptions:
-            for i in range(len(all_transcriptions) - 1, -1, -1):
-                line = all_transcriptions[i]
-                if line.strip():
-                    if "]" in line and "----" in line:
-                        try:
-                            latest_transcription_text = line.split("]", 1)[1].split("----")[0].strip()
-                            break
-                        except IndexError:
-                            continue
-                    elif "----" not in line and "]" not in line and line.strip():
-                        latest_transcription_text = line.strip()
-                        break
-
-        if not latest_transcription_text:
-            latest_transcription_text = "No valid transcription found to speak."
-
-        source_lang_display_name = language
-        target_llm_code = LLM_LANG_CODES.get(tts_target_lang_display)
-        target_gtts_code = GTTS_LANG_CODES.get(tts_target_lang_display)
-        source_llm_code = WHISPER_TO_LLM_SOURCE_LANG.get(source_lang_display_name.lower(), "en")
-
-        final_text_to_speak = latest_transcription_text
-
-        if source_llm_code != target_llm_code:
-            with st.spinner(f"Translating from {source_lang_display_name} to {tts_target_lang_display}..."):
-                final_text_to_speak = translate_text(latest_transcription_text, target_llm_code, source_llm_code)
-
-        if final_text_to_speak:
-            try:
-                with st.spinner(f"Generating speech in {tts_target_lang_display}..."):
-                    tts = gTTS(text=final_text_to_speak, lang=target_gtts_code, slow=False)
-                    mp3_fp = io.BytesIO()
-                    tts.write_to_fp(mp3_fp)
-                    mp3_fp.seek(0)
-
-                    output_device_index = None
-                    use_custom_playback = False
-                    current_output_device_name = st.session_state.selected_speaker_name
-
-                    if current_output_device_name and current_output_device_name != "Default":
-                        st.info(f"Attempting to play audio through: {current_output_device_name}")
-                        try:
-                            all_devices_info = [p.get_device_info_by_index(i) for i in range(p.get_device_count())]
-                            output_device_details = next((d for d in all_devices_info if d['name'] == current_output_device_name and d['maxOutputChannels'] > 0), None)
-
-                            if not output_device_details:
-                                st.warning(f"Selected output device '{current_output_device_name}' not found or not an output device. Falling back to default.")
-                            else:
-                                output_device_index = output_device_details['index']
-                                use_custom_playback = True
-                        except Exception as e:
-                            st.error(f"Error identifying output device '{current_output_device_name}': {e}. Falling back to default.")
-
-                    if use_custom_playback and output_device_index is not None:
-                        try:
-                            audio_segment = AudioSegment.from_file(mp3_fp, format="mp3")
-
-                            playback_stream = p.open(format=p.get_format_from_width(audio_segment.sample_width),
-                                                     channels=audio_segment.channels,
-                                                     rate=audio_segment.frame_rate,
-                                                     output=True,
-                                                     output_device_index=output_device_index)
-
-                            playback_stream.write(audio_segment.raw_data)
-
-                            playback_stream.stop_stream()
-                            playback_stream.close()
-                            st.success(f"Played audio through: {current_output_device_name}")
-                            st.success(f"Speaking: {final_text_to_speak}")
-
-
-                        except Exception as e:
-                            st.error(f"Could not play audio on {current_output_device_name}: {e}. Falling back to default.")
-                            mp3_fp.seek(0)
-                            st.audio(mp3_fp, format='audio/mp3')
-                            st.success(f"Speaking (default output): {final_text_to_speak}")
-                    else:
-                        if current_output_device_name and current_output_device_name != "Default":
-                            st.warning("Playing through default output device.")
-                        mp3_fp.seek(0)
-                        st.audio(mp3_fp, format='audio/mp3')
-                        st.success(f"Speaking: {final_text_to_speak}")
-
-            except Exception as e:
-                st.error(f"Error generating or playing speech: {e}")
-        else:
-            st.warning("No text to speak after translation.")
-    else:
-        st.warning("No transcriptions available to speak.")
+# The following block related to speak_button has been removed as its functionality
+# is now integrated into the live transcription loop via speak_transcription()
 
 TRANSCRIPTION_INTERVAL = st.slider("Set Transcription Interval (in seconds)", min_value=5, max_value=30, value=10)
 
@@ -378,6 +375,27 @@ if start_button:
         task_start = time.time()
         transcription_text = transcribe_audio(audio_chunk, processor, model, language=language, task=task)
         time_taken = time.time() - task_start
+
+        # Speak the transcribed text
+        if transcription_text and transcription_text.strip():
+            current_target_gtts_code = GTTS_LANG_CODES.get(language)
+            current_target_llm_code = LLM_LANG_CODES.get(language)
+            # For this integration, source and target LLM codes are the same (transcription language)
+            # to ensure direct speaking without attempting translation.
+            current_source_llm_code = current_target_llm_code
+
+            speak_transcription(
+                text_to_speak=transcription_text,
+                target_gtts_code=current_target_gtts_code,
+                target_llm_code=current_target_llm_code,
+                source_llm_code=current_source_llm_code, # Same as target to prevent translation
+                output_device_name=st.session_state.selected_speaker_name,
+                pyaudio_instance=p, # Global PyAudio instance
+                translations_enabled=True, # True, but translation is skipped if src/tgt LLM codes are same
+                source_lang_display_name=language, # Display name for source (transcription lang)
+                tts_target_lang_display=language # Display name for target (transcription lang)
+            )
+
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         update_transcription(transcription_text,time_taken)
         live_text.markdown(f"{st.session_state['transcriptions']}")
