@@ -169,55 +169,67 @@ def speak_transcription(
             tts.write_to_fp(mp3_fp)
             mp3_fp.seek(0)
 
-        output_device_index = None
-        use_custom_playback = False
+        audio_segment = AudioSegment.from_file(mp3_fp, format="mp3")
+        playback_successful = False
 
-        # Use the passed output_device_name argument
-        current_output_device_name = output_device_name
+        current_output_device_name = output_device_name # Use the argument
 
+        # Attempt 1: Play through the selected specific device (if not "Default")
         if current_output_device_name and current_output_device_name != "Default":
-            st.info(f"Attempting to play audio through: {current_output_device_name}")
+            st.info(f"Attempting to play audio through specific device: {current_output_device_name}")
+            output_device_index = None
             try:
                 all_devices_info = [pyaudio_instance.get_device_info_by_index(i) for i in range(pyaudio_instance.get_device_count())]
                 output_device_details = next((d for d in all_devices_info if d['name'] == current_output_device_name and d['maxOutputChannels'] > 0), None)
 
-                if not output_device_details:
-                    st.warning(f"Selected output device '{current_output_device_name}' not found or not an output device. Falling back to default.")
-                else:
+                if output_device_details:
                     output_device_index = output_device_details['index']
-                    use_custom_playback = True
+                else:
+                    st.warning(f"Specific output device '{current_output_device_name}' not found or not an output device. Will attempt default playback.")
+
+                if output_device_index is not None:
+                    playback_stream = pyaudio_instance.open(format=pyaudio_instance.get_format_from_width(audio_segment.sample_width),
+                                                             channels=audio_segment.channels,
+                                                             rate=audio_segment.frame_rate,
+                                                             output=True,
+                                                             output_device_index=output_device_index)
+                    playback_stream.write(audio_segment.raw_data)
+                    playback_stream.stop_stream()
+                    playback_stream.close()
+                    playback_successful = True
             except Exception as e:
-                st.error(f"Error identifying output device '{current_output_device_name}': {e}. Falling back to default.")
+                st.error(f"Could not play audio on specific device {current_output_device_name}: {e}. Will attempt default playback.")
 
-        if use_custom_playback and output_device_index is not None:
+        # Attempt 2: Play through system default if specific device failed or "Default" was selected
+        if not playback_successful:
+            log_info_default = "Attempting to play audio through system default output device."
+            if current_output_device_name == "Default":
+                st.info(log_info_default) # Info if Default was chosen
+            elif current_output_device_name and current_output_device_name != "Default":
+                 # Warning if falling back from a specific device
+                st.warning(f"Fallback: {log_info_default}")
+
             try:
-                audio_segment = AudioSegment.from_file(mp3_fp, format="mp3")
-
                 playback_stream = pyaudio_instance.open(format=pyaudio_instance.get_format_from_width(audio_segment.sample_width),
-                                                 channels=audio_segment.channels,
-                                                 rate=audio_segment.frame_rate,
-                                                 output=True,
-                                                 output_device_index=output_device_index)
-
+                                                         channels=audio_segment.channels,
+                                                         rate=audio_segment.frame_rate,
+                                                         output=True) # No output_device_index for default
                 playback_stream.write(audio_segment.raw_data)
-
                 playback_stream.stop_stream()
                 playback_stream.close()
-                st.success(f"Played audio through: {current_output_device_name}")
-                st.success(f"Speaking: {final_text_to_speak}")
-
+                playback_successful = True
             except Exception as e:
-                st.error(f"Could not play audio on {current_output_device_name}: {e}. Falling back to default.")
-                mp3_fp.seek(0) # Reset buffer for st.audio
-                # Fallback to st.audio if custom playback fails
-                st.audio(mp3_fp, format='audio/mp3')
-                st.success(f"Speaking (default output): {final_text_to_speak}")
+                st.error(f"Could not play audio through system default output: {e}. Falling back to Streamlit audio player.")
+
+        # After attempting playback
+        if playback_successful:
+            st.success(f"Speaking: {final_text_to_speak}")
         else:
-            if current_output_device_name and current_output_device_name != "Default":
-                st.warning("Playing through default output device.")
+            # Fallback: Use st.audio() if all direct playback attempts failed
+            st.warning("All direct playback methods failed. Using Streamlit's embedded audio player.")
             mp3_fp.seek(0)
             st.audio(mp3_fp, format='audio/mp3')
-            st.success(f"Speaking: {final_text_to_speak}")
+            st.info(f"Played via fallback player: {final_text_to_speak}")
 
     except Exception as e:
         st.error(f"Error generating or playing speech: {e}")
