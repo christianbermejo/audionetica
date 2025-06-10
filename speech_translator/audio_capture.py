@@ -9,7 +9,7 @@ class AudioCapture:
         self.channels = channels
         self.p = pyaudio.PyAudio()
         self.stream = None
-        self.audio_buffer = deque(maxlen=250)  # ~15 seconds of audio at 16kHz
+        self.audio_buffer = deque(maxlen=160)  # ~10 seconds of audio at 16kHz
 
     def start_stream(self):
         self.stream = self.p.open(

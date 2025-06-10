@@ -46,8 +46,8 @@ def main():
                     if not is_speech(audio_data):
                         silence_frames += 1
                         
-                        # If silence for ~2.5 seconds, process the speech
-                        if silence_frames > 40:  # Adjusted for longer sentences
+                        # If silence for ~1.5 seconds, process the speech
+                        if silence_frames > 23:  # Adjusted for 1.5 seconds at 16kHz, 1024 chunk
                             print("Processing speech...")
                             
                             # Transcribe speech

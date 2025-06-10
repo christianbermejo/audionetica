@@ -1,6 +1,11 @@
 import torch
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
 
+
+# attempt to suppress warning on transformers#28687 bug fix
+language = "English"
+task = "transcribe"
+
 class SpeechRecognizer:
     def __init__(self, model_name="openai/whisper-small"):
         self.processor = WhisperProcessor.from_pretrained(model_name)
@@ -22,7 +27,7 @@ class SpeechRecognizer:
         ).input_features.to(self.device)
 
         # Generate token ids
-        predicted_ids = self.model.generate(input_features)
+        predicted_ids = self.model.generate(input_features, language=language, task=task) # added explicit language and task
 
         # Decode token ids to text
         transcription = self.processor.batch_decode(

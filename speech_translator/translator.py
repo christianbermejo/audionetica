@@ -10,7 +10,7 @@ class Translator:
 
         # Use the Korean translation model
         model_name = "seongs/ke-t5-base-aihub-koen-translation-integrated-10m-en-to-ko"
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False) #implemented False use_fast to disabled tokenizer parallelism #5486
         self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = self.model.to(self.device)
@@ -22,7 +22,7 @@ class Translator:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         # Generate translation
-        translated_ids = self.model.generate(**inputs)
+        translated_ids = self.model.generate(**inputs, max_new_tokens=1000)
 
         # Decode translation
         translated_text = self.tokenizer.batch_decode(
