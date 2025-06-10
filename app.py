@@ -45,6 +45,7 @@ WHISPER_TO_LLM_SOURCE_LANG = {
 # init PyAudio
 p = pyaudio.PyAudio()
 
+# Function to help reinit PyAudio for new input/outputs
 
 # Helper function to safely get index of a device
 def try_get_index(device_list, device_name):
@@ -55,6 +56,16 @@ def try_get_index(device_list, device_name):
 
 # Function to list all input devices
 def list_audio_devices():
+    global p
+
+    if p is None:
+        p = pyaudio.PyAudio()
+    
+    # Refresh
+    else:
+        p.terminate()
+        p = pyaudio.PyAudio()
+    
     device_list = []
     try:
         for idx in range(p.get_device_count()):
@@ -68,6 +79,16 @@ def list_audio_devices():
 
 # Function to list all output audio devices
 def list_output_audio_devices():
+    global p
+
+    if p is None:
+        p = pyaudio.PyAudio()
+    
+    # Refresh
+    else:
+        p.terminate()
+        p = pyaudio.PyAudio()
+
     output_device_list = []
     for idx in range(p.get_device_count()):
         device_info = p.get_device_info_by_index(idx)
@@ -104,7 +125,7 @@ def translate_text(text_to_translate, target_llm_code, source_llm_code=None):
         if source_llm_code == "tl": # Filipino to English
              model_name = "openai/whisper-small"
         elif source_llm_code == "ko": # Korean to English
-             model_name = "seongs/ke-t5-base-aihub-koen-translation-integrated-10m-en-to-ko"
+             model_name = "myshell-ai/MeloTTS-Korean"
         else:
             #  st.warning(f"Translation from {source_llm_code} to English not directly configured. Please transcribe in English or add specific model.")
              return text_to_translate
@@ -112,7 +133,7 @@ def translate_text(text_to_translate, target_llm_code, source_llm_code=None):
         if target_llm_code == "tl": # English to Filipino
             model_name = "openai/whisper-small"
         elif target_llm_code == "ko": # English to Korean
-            model_name = "seongs/ke-t5-base-aihub-koen-translation-integrated-10m-en-to-ko"
+            model_name = "myshell-ai/MeloTTS-Korean"
         else:
             #  st.warning(f"Translation from English to {target_llm_code} not directly configured. Please transcribe in English or add specific model.")
              return text_to_translate
@@ -309,6 +330,8 @@ with col1_speaker:
 with col2_speaker:
     refresh_speakers_button = st.button("Refresh Speakers", key="refresh_speakers")
     if refresh_speakers_button:
+        # reinitialize PyAudio
+        init_pyaudio(p)
         st.session_state.speaker_devices = ["Default"] + list_output_audio_devices()
         if st.session_state.selected_speaker_name not in st.session_state.speaker_devices:
             st.session_state.selected_speaker_name = "Default"
