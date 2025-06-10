@@ -9,3 +9,6 @@ Audionetica aims to be compatible with live streaming tools like OBS.
 
 ## Installation
 `pip install -r requirements.txt`
+
+## How to Run
+`streamlit run app.py`
