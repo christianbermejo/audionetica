@@ -8,3 +8,4 @@ SpeechRecognition
 sentencepiece
 sacremoses
 protobuf
+streamlit_webrtc

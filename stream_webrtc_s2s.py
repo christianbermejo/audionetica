@@ -8,6 +8,7 @@ import queue, pydub, tempfile, os, time
 import torch
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
 from speech_translator.translator import Translator
+from speech_translator.speech_synthesis import SpeechSynthesizer
 
 # attempt to suppress warning on transformers#28687 bug fix
 language = "English"
@@ -28,6 +29,13 @@ def load_translator():
     Load and cache the translator model.
     """
     return Translator(source_lang="en", target_lang="ko")
+
+@st.cache_resource
+def load_speech_synthesizer():
+    """
+    Load and cache the speech synthesizer.
+    """
+    return SpeechSynthesizer()
 
 def save_audio(audio_segment: AudioSegment, base_filename: str) -> None:
     """
@@ -136,7 +144,7 @@ def add_frame_to_chunk(audio_frame, sound_chunk):
     sound_chunk += sound
     return sound_chunk
 
-def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output, translation_output):
+def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output, translation_output, enable_speech=True):
     """
     Handle silence in the audio stream.
 
@@ -146,6 +154,7 @@ def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_o
         silence_frames_threshold (int): The silence frames threshold.
         text_output (st.empty): The Streamlit text output object.
         translation_output (st.empty): The Streamlit translation output object.
+        enable_speech (bool): Whether to enable speech synthesis.
 
     Returns:
         tuple[AudioSegment, int]: The updated sound chunk and number of silence frames.
@@ -157,12 +166,19 @@ def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_o
             translator = load_translator()
             translated_text = translator.translate(text)
             translation_output.write(translated_text)
+            
+            # Synthesize and play the translated text if enabled
+            if enable_speech and translated_text.strip():
+                synthesizer = load_speech_synthesizer()
+                audio = synthesizer.synthesize_speech(translated_text, lang="ko")
+                synthesizer.play_audio(audio)
+                
             sound_chunk = pydub.AudioSegment.empty()
             silence_frames = 0
 
     return sound_chunk, silence_frames
 
-def handle_queue_empty(sound_chunk, text_output, translation_output):
+def handle_queue_empty(sound_chunk, text_output, translation_output, enable_speech=True):
     """
     Handle the case where the audio frame queue is empty.
 
@@ -170,6 +186,7 @@ def handle_queue_empty(sound_chunk, text_output, translation_output):
         sound_chunk (AudioSegment): The current sound chunk.
         text_output (st.empty): The Streamlit text output object.
         translation_output (st.empty): The Streamlit translation output object.
+        enable_speech (bool): Whether to enable speech synthesis.
 
     Returns:
         AudioSegment: The updated sound chunk.
@@ -180,6 +197,13 @@ def handle_queue_empty(sound_chunk, text_output, translation_output):
         translator = load_translator()
         translated_text = translator.translate(text)
         translation_output.write(translated_text)
+        
+        # Synthesize and play the translated text if enabled
+        if enable_speech and translated_text.strip():
+            synthesizer = load_speech_synthesizer()
+            audio = synthesizer.synthesize_speech(translated_text, lang="ko")
+            synthesizer.play_audio(audio)
+            
         sound_chunk = pydub.AudioSegment.empty()
 
     return sound_chunk
@@ -188,6 +212,7 @@ def app_sst(
         status_indicator,
         text_output,
         translation_output,
+        enable_speech=True,
         timeout=3, 
         energy_threshold=2000, 
         silence_frames_threshold=100
@@ -196,12 +221,14 @@ def app_sst(
     The main application function for real-time speech-to-text and translation. 
 
     This function creates a WebRTC streamer, starts receiving audio data, processes the audio frames, 
-    and transcribes the audio into text when there is silence longer than a certain threshold. It also translates the text.
+    and transcribes the audio into text when there is silence longer than a certain threshold. It also translates the text
+    and optionally synthesizes speech from the translated text.
 
     Args:
         status_indicator: A Streamlit object for showing the status (running or stopping).
         text_output: A Streamlit object for showing the transcribed text.
         translation_output: A Streamlit object for showing the translated text.
+        enable_speech (bool, optional): Whether to enable speech synthesis. Default is True.
         timeout (int, optional): Timeout for getting frames from the audio receiver. Default is 3 seconds.
         energy_threshold (int, optional): The energy threshold below which a frame is considered silence. Default is 2000.
         silence_frames_threshold (int, optional): The number of consecutive silence frames to trigger transcription. Default is 100 frames.
@@ -224,11 +251,11 @@ def app_sst(
                 audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=timeout)
             except queue.Empty:
                 status_indicator.write("No frame arrived.")
-                sound_chunk = handle_queue_empty(sound_chunk, text_output, translation_output)
+                sound_chunk = handle_queue_empty(sound_chunk, text_output, translation_output, enable_speech)
                 continue
 
             sound_chunk, silence_frames = process_audio_frames(audio_frames, sound_chunk, silence_frames, energy_threshold)
-            sound_chunk, silence_frames = handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output, translation_output)
+            sound_chunk, silence_frames = handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output, translation_output, enable_speech)
         else:
             status_indicator.write("Currently stopped.")
             if len(sound_chunk) > 0:
@@ -237,11 +264,22 @@ def app_sst(
                 translator = load_translator()
                 translated_text = translator.translate(text)
                 translation_output.write(translated_text)
+                
+                # Synthesize and play the translated text if enabled
+                if enable_speech and translated_text.strip():
+                    synthesizer = load_speech_synthesizer()
+                    audio = synthesizer.synthesize_speech(translated_text, lang="ko")
+                    synthesizer.play_audio(audio)
+                    synthesizer.close()
             break
 
 def main():
     st.title("Real-time Speech-to-Text with Translation")
     status_indicator = st.empty()
+    
+    # Add a checkbox to enable/disable speech synthesis
+    enable_speech = st.checkbox("Enable Speech Synthesis", value=True)
+    
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Transcribed Text (English)")
@@ -249,7 +287,8 @@ def main():
     with col2:
         st.subheader("Translated Text (Korean)")
         translation_output = st.empty()
-    app_sst(status_indicator, text_output, translation_output)
+    
+    app_sst(status_indicator, text_output, translation_output, enable_speech=enable_speech)
 
 if __name__ == "__main__":
     main()
