@@ -7,6 +7,7 @@ from pydub import AudioSegment
 import queue, pydub, tempfile, os, time
 import torch
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
+from speech_translator.translator import Translator
 
 # attempt to suppress warning on transformers#28687 bug fix
 language = "English"
@@ -20,6 +21,13 @@ def load_whisper_model_and_processor():
     processor = WhisperProcessor.from_pretrained("openai/whisper-small")
     model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")
     return model, processor
+
+@st.cache_resource
+def load_translator():
+    """
+    Load and cache the translator model.
+    """
+    return Translator(source_lang="en", target_lang="ko")
 
 def save_audio(audio_segment: AudioSegment, base_filename: str) -> None:
     """
@@ -128,7 +136,7 @@ def add_frame_to_chunk(audio_frame, sound_chunk):
     sound_chunk += sound
     return sound_chunk
 
-def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output):
+def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output, translation_output):
     """
     Handle silence in the audio stream.
 
@@ -137,6 +145,7 @@ def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_o
         silence_frames (int): The current number of silence frames.
         silence_frames_threshold (int): The silence frames threshold.
         text_output (st.empty): The Streamlit text output object.
+        translation_output (st.empty): The Streamlit translation output object.
 
     Returns:
         tuple[AudioSegment, int]: The updated sound chunk and number of silence frames.
@@ -145,18 +154,22 @@ def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_o
         if len(sound_chunk) > 0:
             text = transcribe(sound_chunk)
             text_output.write(text)
+            translator = load_translator()
+            translated_text = translator.translate(text)
+            translation_output.write(translated_text)
             sound_chunk = pydub.AudioSegment.empty()
             silence_frames = 0
 
     return sound_chunk, silence_frames
 
-def handle_queue_empty(sound_chunk, text_output):
+def handle_queue_empty(sound_chunk, text_output, translation_output):
     """
     Handle the case where the audio frame queue is empty.
 
     Args:
         sound_chunk (AudioSegment): The current sound chunk.
         text_output (st.empty): The Streamlit text output object.
+        translation_output (st.empty): The Streamlit translation output object.
 
     Returns:
         AudioSegment: The updated sound chunk.
@@ -164,6 +177,9 @@ def handle_queue_empty(sound_chunk, text_output):
     if len(sound_chunk) > 0:
         text = transcribe(sound_chunk)
         text_output.write(text)
+        translator = load_translator()
+        translated_text = translator.translate(text)
+        translation_output.write(translated_text)
         sound_chunk = pydub.AudioSegment.empty()
 
     return sound_chunk
@@ -171,19 +187,21 @@ def handle_queue_empty(sound_chunk, text_output):
 def app_sst(
         status_indicator,
         text_output,
+        translation_output,
         timeout=3, 
         energy_threshold=2000, 
         silence_frames_threshold=100
         ):
     """
-    The main application function for real-time speech-to-text. 
+    The main application function for real-time speech-to-text and translation. 
 
     This function creates a WebRTC streamer, starts receiving audio data, processes the audio frames, 
-    and transcribes the audio into text when there is silence longer than a certain threshold.
+    and transcribes the audio into text when there is silence longer than a certain threshold. It also translates the text.
 
     Args:
         status_indicator: A Streamlit object for showing the status (running or stopping).
         text_output: A Streamlit object for showing the transcribed text.
+        translation_output: A Streamlit object for showing the translated text.
         timeout (int, optional): Timeout for getting frames from the audio receiver. Default is 3 seconds.
         energy_threshold (int, optional): The energy threshold below which a frame is considered silence. Default is 2000.
         silence_frames_threshold (int, optional): The number of consecutive silence frames to trigger transcription. Default is 100 frames.
@@ -191,7 +209,7 @@ def app_sst(
     webrtc_ctx = webrtc_streamer(
         key="speech-to-text",
         mode=WebRtcMode.SENDONLY,
-        audio_receiver_size=1024,
+        audio_receiver_size=8192,
         media_stream_constraints={"video": False, "audio": True},
     )
 
@@ -206,23 +224,32 @@ def app_sst(
                 audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=timeout)
             except queue.Empty:
                 status_indicator.write("No frame arrived.")
-                sound_chunk = handle_queue_empty(sound_chunk, text_output)
+                sound_chunk = handle_queue_empty(sound_chunk, text_output, translation_output)
                 continue
 
             sound_chunk, silence_frames = process_audio_frames(audio_frames, sound_chunk, silence_frames, energy_threshold)
-            sound_chunk, silence_frames = handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output)
+            sound_chunk, silence_frames = handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_output, translation_output)
         else:
             status_indicator.write("Currently stopped.")
             if len(sound_chunk) > 0:
                 text = transcribe(sound_chunk)
                 text_output.write(text)
+                translator = load_translator()
+                translated_text = translator.translate(text)
+                translation_output.write(translated_text)
             break
 
 def main():
-    st.title("Real-time Speech-to-Text")
+    st.title("Real-time Speech-to-Text with Translation")
     status_indicator = st.empty()
-    text_output = st.empty()
-    app_sst(status_indicator,text_output)
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("Transcribed Text (English)")
+        text_output = st.empty()
+    with col2:
+        st.subheader("Translated Text (Korean)")
+        translation_output = st.empty()
+    app_sst(status_indicator, text_output, translation_output)
 
 if __name__ == "__main__":
     main()
