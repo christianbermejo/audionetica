@@ -1,27 +1,21 @@
 import streamlit as st
 import numpy as np
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
-# from streamlit_webrtc import VideoTransformerBase, VideoTransformerContext
 
 from pydub import AudioSegment
 import queue, pydub, tempfile, os, time
 import torch
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
-from speech_translator.translator import Translator
-from speech_translator.speech_synthesis import SpeechSynthesizer
-
-# attempt to suppress warning on transformers#28687 bug fix
-language = "English"
-task = "transcribe"
+from translator import Translator
+from speech_synthesis import SpeechSynthesizer
+from transcriber import Transcriber
 
 @st.cache_resource
-def load_whisper_model_and_processor():
+def load_transcriber():
     """
-    Load and cache the whisper-small model and processor from HuggingFace.
+    Load and cache the transcriber.
     """
-    processor = WhisperProcessor.from_pretrained("openai/whisper-small")
-    model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")
-    return model, processor
+    return Transcriber(language="English", task="transcribe")
 
 @st.cache_resource
 def load_translator():
@@ -37,112 +31,6 @@ def load_speech_synthesizer():
     """
     return SpeechSynthesizer()
 
-def save_audio(audio_segment: AudioSegment, base_filename: str) -> None:
-    """
-    Save an audio segment to a .wav file.
-
-    Args:
-        audio_segment (AudioSegment): The audio segment to be saved.
-        base_filename (str): The base filename to use for the saved .wav file.
-    """
-    filename = f"{base_filename}_{int(time.time())}.wav"
-    audio_segment.export(filename, format="wav")
-
-def transcribe(audio_segment: AudioSegment, debug: bool = False) -> str:
-    """
-    Transcribe an audio segment using HuggingFace's Whisper-small model.
-
-    Args:
-        audio_segment (AudioSegment): The audio segment to transcribe.
-        debug (bool): If True, save the audio segment for debugging purposes.
-
-    Returns:
-        str: The transcribed text.
-    """
-    if debug:
-        save_audio(audio_segment, "debug_audio")
-
-    # Export AudioSegment to a temporary wav file
-    # with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmpfile:
-    #     audio_segment.export(tmpfile.name, format="wav")
-    #     tmpfile_path = tmpfile.name
-
-    # Convert AudioSegment WAV to 16kHz mono PCM if needed
-    audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
-
-    # Convert to numpy array (float32)
-    samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32) / 32768.0
-
-    # Load model and processor (cached)
-    model, processor = load_whisper_model_and_processor()
-
-    # Tokenize and prepare input
-    input_features = processor(samples, sampling_rate=16000, return_tensors="pt").input_features
-
-    # Generate tokens and decode
-    with torch.no_grad():
-        predicted_ids = model.generate(input_features,language=language, task=task) # added explicit language and task)
-        transcription = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-
-    # os.remove(tmpfile_path)
-    return transcription
-
-def frame_energy(frame):
-    """
-    Compute the energy of an audio frame.
-
-    Args:
-        frame (VideoTransformerBase.Frame): The audio frame to compute the energy of.
-
-    Returns:
-        float: The energy of the frame.
-    """
-    samples = np.frombuffer(frame.to_ndarray().tobytes(), dtype=np.int16).astype(np.int32)
-    return np.sqrt(np.mean(samples**2))
- 
-def process_audio_frames(audio_frames, sound_chunk, silence_frames, energy_threshold):
-    """
-    Process a list of audio frames.
-
-    Args:
-        audio_frames (list[VideoTransformerBase.Frame]): The list of audio frames to process.
-        sound_chunk (AudioSegment): The current sound chunk.
-        silence_frames (int): The current number of silence frames.
-        energy_threshold (int): The energy threshold to use for silence detection.
-
-    Returns:
-        tuple[AudioSegment, int]: The updated sound chunk and number of silence frames.
-    """
-    for audio_frame in audio_frames:
-        sound_chunk = add_frame_to_chunk(audio_frame, sound_chunk)
-
-        energy = frame_energy(audio_frame)
-        if energy < energy_threshold:
-            silence_frames += 1
-        else:
-            silence_frames = 0
-
-    return sound_chunk, silence_frames
-
-def add_frame_to_chunk(audio_frame, sound_chunk):
-    """
-    Add an audio frame to a sound chunk.
-
-    Args:
-        audio_frame (VideoTransformerBase.Frame): The audio frame to add.
-        sound_chunk (AudioSegment): The current sound chunk.
-
-    Returns:
-        AudioSegment: The updated sound chunk.
-    """
-    sound = pydub.AudioSegment(
-        data=audio_frame.to_ndarray().tobytes(),
-        sample_width=audio_frame.format.bytes,
-        frame_rate=audio_frame.sample_rate,
-        channels=len(audio_frame.layout.channels),
-    )
-    sound_chunk += sound
-    return sound_chunk
 
 def update_ui(text_container, translation_container):
     """
@@ -162,7 +50,7 @@ def update_ui(text_container, translation_container):
         for t in st.session_state.translations:
             st.markdown(f"- {t}")
 
-def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_container, translation_container, enable_speech=True):
+def handle_silence(transcriber, translator, synthesizer, sound_chunk, silence_frames, silence_frames_threshold, text_container, translation_container, enable_speech=True):
     """
     Handle silence in the audio stream.
 
@@ -179,10 +67,9 @@ def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_c
     """
     if silence_frames >= silence_frames_threshold:
         if len(sound_chunk) > 0:
-            text = transcribe(sound_chunk)
+            text = transcriber.transcribe(sound_chunk)
             
             # Translate the text
-            translator = load_translator()
             translated_text = translator.translate(text)
             
             # Only append to history if there's actual content
@@ -203,7 +90,6 @@ def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_c
                 
                 # Synthesize and play the translated text if enabled
                 if enable_speech and translated_text.strip():
-                    synthesizer = load_speech_synthesizer()
                     audio = synthesizer.synthesize_speech(translated_text, lang="ko")
                     synthesizer.play_audio(audio)
             
@@ -212,7 +98,7 @@ def handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_c
 
     return sound_chunk, silence_frames
 
-def handle_queue_empty(sound_chunk, text_container, translation_container, enable_speech=True):
+def handle_queue_empty(transcriber, translator, synthesizer, sound_chunk, text_container, translation_container, enable_speech=True):
     """
     Handle the case where the audio frame queue is empty.
 
@@ -227,10 +113,9 @@ def handle_queue_empty(sound_chunk, text_container, translation_container, enabl
     """
     if len(sound_chunk) > 0:
         # Process the same way as in handle_silence
-        text = transcribe(sound_chunk)
+        text = transcriber.transcribe(sound_chunk)
         
         # Translate the text
-        translator = load_translator()
         translated_text = translator.translate(text)
         
         # Only append to history if there's actual content
@@ -251,7 +136,6 @@ def handle_queue_empty(sound_chunk, text_container, translation_container, enabl
             
             # Synthesize and play the translated text if enabled
             if enable_speech and translated_text.strip():
-                synthesizer = load_speech_synthesizer()
                 audio = synthesizer.synthesize_speech(translated_text, lang="ko")
                 synthesizer.play_audio(audio)
         
@@ -302,6 +186,9 @@ def create_download_content(transcriptions_list, include_timestamps=True):
         return "\n".join(cleaned_list)
 
 def app_sst(
+        transcriber,
+        translator,
+        synthesizer,
         status_indicator,
         text_container,
         translation_container,
@@ -349,19 +236,18 @@ def app_sst(
                 audio_frames = webrtc_ctx.audio_receiver.get_frames(timeout=timeout)
             except queue.Empty:
                 status_indicator.write("No frame arrived.")
-                sound_chunk = handle_queue_empty(sound_chunk, text_container, translation_container, enable_speech)
+                sound_chunk = handle_queue_empty(transcriber, translator, synthesizer, sound_chunk, text_container, translation_container, enable_speech)
                 continue
 
-            sound_chunk, silence_frames = process_audio_frames(audio_frames, sound_chunk, silence_frames, energy_threshold)
-            sound_chunk, silence_frames = handle_silence(sound_chunk, silence_frames, silence_frames_threshold, text_container, translation_container, enable_speech)
+            sound_chunk, silence_frames = transcriber.process_audio_frames(audio_frames, sound_chunk, silence_frames, energy_threshold)
+            sound_chunk, silence_frames = handle_silence(transcriber, translator, synthesizer, sound_chunk, silence_frames, silence_frames_threshold, text_container, translation_container, enable_speech)
         else:
             status_indicator.write("Currently stopped.")
             if len(sound_chunk) > 0:
                 # Process the same way as in handle_silence
-                text = transcribe(sound_chunk)
+                text = transcriber.transcribe(sound_chunk)
                 
                 # Translate the text
-                translator = load_translator()
                 translated_text = translator.translate(text)
                 
                 # Only append to history if there's actual content
@@ -382,7 +268,6 @@ def app_sst(
                     
                     # Synthesize and play the translated text if enabled
                     if enable_speech and translated_text.strip():
-                        synthesizer = load_speech_synthesizer()
                         audio = synthesizer.synthesize_speech(translated_text, lang="ko")
                         synthesizer.play_audio(audio)
                         synthesizer.close()
@@ -447,19 +332,6 @@ def main():
                 st.session_state.current_translation = ""
                 st.rerun()
 
-    # # Add controls in a sidebar
-    # with st.sidebar:
-    #     # Add a checkbox to enable/disable speech synthesis
-    #     enable_speech = st.checkbox("Enable Speech Synthesis", value=True)
-        
-    #     # Add a button to clear history
-    #     if st.button("Clear History"):
-    #         st.session_state.transcriptions = []
-    #         st.session_state.translations = []
-    #         st.session_state.current_transcription = ""
-    #         st.session_state.current_translation = ""
-    #         st.rerun()
-
     status_indicator = st.empty()
     
     # Create two columns for transcription and translation headers
@@ -478,8 +350,12 @@ def main():
     # Create a container for download buttons
     download_container = st.container()
     
+    # Load the cached transcriber, translator, and synthesizer
+    transcriber = load_transcriber()
+    translator = load_translator()
+    synthesizer = load_speech_synthesizer()
     # Pass the columns directly as containers
-    app_sst(status_indicator, col1, col2, download_container, enable_speech=enable_speech)
+    app_sst(transcriber, translator, synthesizer, status_indicator, col1, col2, download_container, enable_speech=enable_speech)
 
 if __name__ == "__main__":
     main()
