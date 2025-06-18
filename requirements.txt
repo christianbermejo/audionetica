@@ -1,0 +1,11 @@
+pyaudio
+torch==2.2.2
+transformers
+gtts
+pydub
+numpy==1.26.0
+SpeechRecognition
+sentencepiece
+sacremoses
+protobuf
+streamlit_webrtc
