@@ -1,20 +1,26 @@
-import torch
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+import os
+import openai
 
 class Translator:
     def __init__(self, source_lang="en", target_lang="ko"):
-        model_name = "seongs/ke-t5-base-aihub-koen-translation-integrated-10m-en-to-ko"
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = self.model.to(self.device)
-
+        openai.api_key = os.environ.get("OPENAI_API_KEY")
+        self.client = openai.OpenAI()
+        self.source_lang = source_lang
+        self.target_lang = target_lang
+        
     def translate(self, text):
-        inputs = self.tokenizer(text, return_tensors="pt", padding=True)
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        translated_ids = self.model.generate(**inputs, max_new_tokens=1000)
-        translated_text = self.tokenizer.batch_decode(
-            translated_ids,
-            skip_special_tokens=True
-        )[0]
-        return translated_text.strip()
+        if not text.strip():
+            return ""
+            
+        # Use the most cost-effective model
+        response = self.client.chat.completions.create(
+            model="gpt-3.5-turbo",  # Most cost-effective model for this task
+            messages=[
+                {"role": "system", "content": f"Translate the following text from {self.source_lang} to {self.target_lang}. Respond with only the translation."},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.3,  # Lower temperature for more consistent translations
+            max_tokens=150    # Limit token usage to control costs
+        )
+        
+        return response.choices[0].message.content.strip()
