@@ -59,7 +59,9 @@ def app_sst(
         enable_speech=True,
         timeout=1, 
         energy_threshold=2000, 
-        silence_frames_threshold=75
+        silence_frames_threshold=25,
+        use_dynamic_threshold=True,
+        sensitivity=1.0
         ):
     # Queues for asynchronous processing
     transcription_queue = queue.Queue()
@@ -134,7 +136,7 @@ def app_sst(
     webrtc_ctx = webrtc_streamer(
         key="speech-to-text",
         mode=WebRtcMode.SENDONLY,
-        audio_receiver_size=2048,
+        audio_receiver_size=256,
         media_stream_constraints={"video": False, "audio": True},
     )
 
@@ -142,8 +144,16 @@ def app_sst(
 
     sound_chunk = pydub.AudioSegment.empty()
     silence_frames = 0
+    silence_start_time = None
 
     last_update_time = time.time()
+
+    # Hysteresis thresholds
+    enter_silence_threshold_factor = 1.0 / sensitivity  # Lower to enter silence state
+    exit_silence_threshold_factor = 1.2 * sensitivity   # Higher to exit silence state
+
+    min_silence_duration = 0.5 / sensitivity  # seconds, adjusted by sensitivity
+    max_silence_duration = 2.0 * sensitivity  # seconds, adjusted by sensitivity
 
     while True:
         if webrtc_ctx.audio_receiver:
@@ -155,23 +165,54 @@ def app_sst(
                 status_indicator.write("No frame arrived.")
                 continue
 
+            # Update dynamic threshold if enabled
+            if use_dynamic_threshold and audio_frames:
+                dynamic_threshold = transcriber.calculate_dynamic_threshold(audio_frames)
+            else:
+                dynamic_threshold = energy_threshold
+
             # Process audio frames for silence detection
             for audio_frame in audio_frames:
                 sound_chunk = transcriber.add_frame_to_chunk(audio_frame, sound_chunk)
-                energy = transcriber.frame_energy(audio_frame)
-                if energy < energy_threshold:
+
+                # Apply hysteresis: different thresholds for entering/exiting silence
+                if silence_frames == 0:  # Not in silence state
+                    threshold_to_use = dynamic_threshold * enter_silence_threshold_factor
+                else:  # Already in silence state
+                    threshold_to_use = dynamic_threshold * exit_silence_threshold_factor
+
+                # Check if frame is silence using multiple features
+                is_silence = transcriber.is_silence(audio_frame, threshold_to_use)
+
+                if is_silence:
+                    if silence_frames == 0:
+                        # Just entered silence
+                        silence_start_time = time.time()
                     silence_frames += 1
                 else:
                     silence_frames = 0
+                    silence_start_time = None
 
             current_time = time.time()
-            if silence_frames >= silence_frames_threshold:
+
+            # Check if we've been in silence long enough
+            silence_duration_condition = False
+            if silence_start_time is not None:
+                silence_duration = current_time - silence_start_time
+                silence_duration_condition = (
+                    silence_duration >= min_silence_duration and 
+                    (silence_duration <= max_silence_duration or silence_frames >= silence_frames_threshold)
+                )
+
+            # Process chunk if silence detected with duration constraints
+            if silence_frames >= silence_frames_threshold and silence_duration_condition:
                 if len(sound_chunk) > 0 and (current_time - last_transcription_time[0]) >= min_time_between_transcriptions:
                     if len(sound_chunk) >= 1000:  # Minimum 1 second of audio
                         transcription_queue.put(sound_chunk)
                         last_transcription_time[0] = current_time
                     sound_chunk = pydub.AudioSegment.empty()
                     silence_frames = 0
+                    silence_start_time = None
 
             # Process results from worker threads and buffer them
             while not result_queue.empty():
