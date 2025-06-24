@@ -1,35 +1,56 @@
 import os
 import tempfile
-from pydub import AudioSegment
-import pydub
+import queue
+import threading
 import time
+from pydub import AudioSegment
 import openai
 import numpy as np
 
-class Transcriber:
-    def __init__(self, language="en", task="transcribe"):
-        self.language = language
-        self.task = task
+class RealtimeTranscriber:
+    def __init__(self, language="en"):
         openai.api_key = os.environ.get("OPENAI_API_KEY")
         self.client = openai.OpenAI()
+        self.language = language
+        self.audio_buffer = queue.Queue()
+        self.transcriptions = []
+        self._stop_event = threading.Event()
+        self._thread = None
 
-    def save_audio(self, audio_segment: AudioSegment, base_filename: str) -> None:
-        """
-        Save an audio segment to a .wav file.
-        """
-        filename = f"{base_filename}_{int(time.time())}.wav"
-        audio_segment.export(filename, format="wav")
+    def start(self):
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._process_audio)
+        self._thread.start()
 
-    def transcribe(self, audio_segment: AudioSegment, debug: bool = False) -> str:
-        """
-        Transcribe an audio segment using OpenAI's Realtime API.
-        """
-        if debug:
-            self.save_audio(audio_segment, "debug_audio")
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join()
 
-        audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
-        with tempfile.NamedTemporaryFile(suffix='.wav') as f:
-            audio_segment.export(f.name, format="wav")
+    def add_audio_chunk(self, audio_chunk: AudioSegment):
+        self.audio_buffer.put(audio_chunk)
+
+    def _process_audio(self):
+        """
+        Process audio chunks from the buffer and transcribe using OpenAI's realtime API.
+        """
+        while not self._stop_event.is_set() or not self.audio_buffer.empty():
+            try:
+                audio_chunk = self.audio_buffer.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            text = self.transcribe_chunk(audio_chunk)
+            if text.strip():
+                self.transcriptions.append(text)
+
+    def transcribe_chunk(self, audio_chunk: AudioSegment) -> str:
+        """
+        Transcribe an audio chunk using OpenAI's realtime transcription API.
+        """
+        audio_chunk = audio_chunk.set_frame_rate(16000).set_channels(1)
+        with tempfile.NamedTemporaryFile(suffix=".wav") as f:
+            audio_chunk.export(f.name, format="wav")
             with open(f.name, "rb") as audio_file:
                 response = self.client.audio.transcriptions.create(
                     model="whisper-1",
@@ -62,7 +83,7 @@ class Transcriber:
         """
         Add an audio frame to a sound chunk.
         """
-        sound = pydub.AudioSegment(
+        sound = AudioSegment(
             data=audio_frame.to_ndarray().tobytes(),
             sample_width=audio_frame.format.bytes,
             frame_rate=audio_frame.sample_rate,

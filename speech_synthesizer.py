@@ -12,11 +12,10 @@ class SpeechSynthesizer:
         self.p = pyaudio.PyAudio()
 
     def synthesize_speech(self, text, lang="ko"):
-        """Convert text to speech using OpenAI TTS API and return a pydub AudioSegment"""
         with tempfile.NamedTemporaryFile(suffix='.mp3') as f:
             response = self.client.audio.speech.create(
                 model="gpt-4o-mini-tts",
-                voice="alloy",  # Options: alloy, echo, fable, onyx, nova, shimmer
+                voice="alloy",
                 input=text
             )
             response.stream_to_file(f.name)
@@ -24,7 +23,6 @@ class SpeechSynthesizer:
             return audio
 
     def play_audio(self, audio):
-        """Play a pydub AudioSegment through speakers using PyAudio"""
         with tempfile.NamedTemporaryFile(suffix='.wav') as f:
             audio.export(f.name, format="wav")
             wf = wave.open(f.name, 'rb')
