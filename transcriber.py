@@ -1,24 +1,17 @@
-import numpy as np
-import torch
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-import streamlit as st
+import os
+import tempfile
 from pydub import AudioSegment
 import pydub
 import time
+import openai
+import numpy as np
 
 class Transcriber:
-    def __init__(self, language="English", task="transcribe"):
+    def __init__(self, language="en", task="transcribe"):
         self.language = language
         self.task = task
-        self.model, self.processor = self.load_whisper_model_and_processor()
-
-    def load_whisper_model_and_processor(self):
-        """
-        Load and cache the whisper-small model and processor from HuggingFace.
-        """
-        processor = WhisperProcessor.from_pretrained("openai/whisper-small")
-        model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")
-        return model, processor
+        openai.api_key = os.environ.get("OPENAI_API_KEY")
+        self.client = openai.OpenAI()
 
     def save_audio(self, audio_segment: AudioSegment, base_filename: str) -> None:
         """
@@ -29,23 +22,21 @@ class Transcriber:
 
     def transcribe(self, audio_segment: AudioSegment, debug: bool = False) -> str:
         """
-        Transcribe an audio segment using HuggingFace's Whisper-small model.
+        Transcribe an audio segment using OpenAI's Realtime API.
         """
         if debug:
             self.save_audio(audio_segment, "debug_audio")
 
         audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
-        samples = np.array(audio_segment.get_array_of_samples()).astype(np.float32) / 32768.0
-        input_features = self.processor(samples, sampling_rate=16000, return_tensors="pt").input_features
-
-        with torch.no_grad():
-            predicted_ids = self.model.generate(
-                input_features,
-                language=self.language,
-                task=self.task
-            )
-            transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-        return transcription
+        with tempfile.NamedTemporaryFile(suffix='.wav') as f:
+            audio_segment.export(f.name, format="wav")
+            with open(f.name, "rb") as audio_file:
+                response = self.client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language=self.language.lower()
+                )
+        return response.text
 
     def frame_energy(self, frame):
         """

@@ -1,21 +1,23 @@
+
+import os
 import streamlit as st
 import numpy as np
 from streamlit_webrtc import WebRtcMode, webrtc_streamer
-
 from pydub import AudioSegment
-import queue, pydub, tempfile, os, time
-import torch
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
+import queue, pydub, tempfile, time
+import openai
 from translator import Translator
 from speech_synthesis import SpeechSynthesizer
 from transcriber import Transcriber
+
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
 @st.cache_resource
 def load_transcriber():
     """
     Load and cache the transcriber.
     """
-    return Transcriber(language="English", task="transcribe")
+    return Transcriber(language="en", task="transcribe")
 
 @st.cache_resource
 def load_translator():
@@ -30,7 +32,6 @@ def load_speech_synthesizer():
     Load and cache the speech synthesizer.
     """
     return SpeechSynthesizer()
-
 
 def update_ui(text_container, translation_container):
     """
@@ -185,6 +186,7 @@ def create_download_content(transcriptions_list, include_timestamps=True):
                 cleaned_list.append(item)
         return "\n".join(cleaned_list)
 
+
 def app_sst(
         transcriber,
         translator,
@@ -196,7 +198,7 @@ def app_sst(
         enable_speech=True,
         timeout=3, 
         energy_threshold=2000, 
-        silence_frames_threshold=100
+        silence_frames_threshold=50
         ):
     """
     The main application function for real-time speech-to-text and translation. 
@@ -213,13 +215,19 @@ def app_sst(
         enable_speech (bool, optional): Whether to enable speech synthesis. Default is True.
         timeout (int, optional): Timeout for getting frames from the audio receiver. Default is 3 seconds.
         energy_threshold (int, optional): The energy threshold below which a frame is considered silence. Default is 2000.
-        silence_frames_threshold (int, optional): The number of consecutive silence frames to trigger transcription. Default is 100 frames.
+        silence_frames_threshold (int, optional): The number of consecutive silence frames to trigger transcription. Default is 50 frames.
     """
     webrtc_ctx = webrtc_streamer(
         key="speech-to-text",
         mode=WebRtcMode.SENDONLY,
         audio_receiver_size=8192,
-        media_stream_constraints={"video": False, "audio": True},
+        media_stream_constraints={
+            "video": False,
+            "audio": {
+                "sampleRate": 16000,
+                "channelCount": 1,
+            }
+        },
     )
     
     # Store WebRTC state in session state for access outside this function
@@ -282,10 +290,6 @@ def app_sst(
             transcriptions_text = create_download_content(st.session_state.transcriptions)
             translations_text = create_download_content(st.session_state.translations)
             
-            # # Create download content without timestamps
-            # transcriptions_text_clean = create_download_content(st.session_state.transcriptions, include_timestamps=False)
-            # translations_text_clean = create_download_content(st.session_state.translations, include_timestamps=False)
-            
             col1, col2 = st.columns(2)
             
             with col1:
@@ -296,7 +300,6 @@ def app_sst(
                     mime="text/plain"
                 )
                 
-                
             with col2:
                 st.download_button(
                     "Download Korean Translations (with timestamps)",
@@ -304,7 +307,6 @@ def app_sst(
                     file_name="translations_with_timestamps.txt",
                     mime="text/plain"
                 )
-
 def main():
     st.title("Real-time Speech-to-Text with Translation")
     

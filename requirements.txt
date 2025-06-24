@@ -9,3 +9,4 @@ sentencepiece
 sacremoses
 protobuf
 streamlit_webrtc
+openai>=1.0.0
