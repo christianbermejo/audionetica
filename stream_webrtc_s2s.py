@@ -153,7 +153,7 @@ def app_sst(
     exit_silence_threshold_factor = 1.2 * sensitivity   # Higher to exit silence state
 
     min_silence_duration = 0.2 / sensitivity  # seconds, adjusted by sensitivity (shortened for shorter sentences)
-    max_silence_duration = 2.0 * sensitivity  # seconds, adjusted by sensitivity
+    max_silence_duration = 0.5 * sensitivity  # seconds, adjusted by sensitivity (shortened for sensitivity)
 
     while True:
         if webrtc_ctx.audio_receiver:
