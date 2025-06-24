@@ -198,7 +198,7 @@ def app_sst(
         enable_speech=True,
         timeout=3, 
         energy_threshold=2000, 
-        silence_frames_threshold=50
+        silence_frames_threshold=20
         ):
     """
     The main application function for real-time speech-to-text and translation. 
@@ -215,17 +215,20 @@ def app_sst(
         enable_speech (bool, optional): Whether to enable speech synthesis. Default is True.
         timeout (int, optional): Timeout for getting frames from the audio receiver. Default is 3 seconds.
         energy_threshold (int, optional): The energy threshold below which a frame is considered silence. Default is 2000.
-        silence_frames_threshold (int, optional): The number of consecutive silence frames to trigger transcription. Default is 50 frames.
+        silence_frames_threshold (int, optional): The number of consecutive silence frames to trigger transcription. Default is 20 frames.
     """
     webrtc_ctx = webrtc_streamer(
         key="speech-to-text",
         mode=WebRtcMode.SENDONLY,
-        audio_receiver_size=8192,
+        audio_receiver_size=4096,
         media_stream_constraints={
             "video": False,
             "audio": {
                 "sampleRate": 16000,
                 "channelCount": 1,
+                "echoCancellation": True,
+                "noiseSuppression": True,
+                "autoGainControl": True
             }
         },
     )
