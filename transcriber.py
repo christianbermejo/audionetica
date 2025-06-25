@@ -120,14 +120,15 @@ class Transcriber:
 
         return self._smoothed_energy
 
-    def is_silence(self, frame, energy_threshold, zcr_threshold=0.1):
+    def is_silence(self, frame, energy_threshold, zcr_threshold=0.1, adaptive_factor=0.8):
         """
-        Determine if a frame is silence using multiple features.
+        Determine if a frame is silence using multiple features with adaptive thresholds.
 
         Args:
             frame: Audio frame
-            energy_threshold: Energy threshold for silence
+            energy_threshold: Base energy threshold for silence
             zcr_threshold: Zero-crossing rate threshold
+            adaptive_factor: Factor to adjust thresholds based on recent audio (0-1)
 
         Returns:
             Boolean indicating if the frame is silence
@@ -136,7 +137,17 @@ class Transcriber:
         smoothed_energy = self.smooth_energy(energy)
         zcr = self.zero_crossing_rate(frame)
 
-        is_silence_energy = smoothed_energy < energy_threshold
+        # Calculate adaptive thresholds based on recent history
+        if self._energy_history:
+            recent_energy_avg = sum(self._energy_history[-20:]) / min(len(self._energy_history), 20)
+            # Adjust threshold based on recent energy levels
+            adjusted_threshold = energy_threshold * (1 - adaptive_factor) + recent_energy_avg * adaptive_factor * 0.5
+            # Ensure threshold doesn't go too low
+            adjusted_threshold = max(energy_threshold * 0.5, adjusted_threshold)
+        else:
+            adjusted_threshold = energy_threshold
+
+        is_silence_energy = smoothed_energy < adjusted_threshold
         is_silence_zcr = zcr < zcr_threshold
 
         return is_silence_energy and is_silence_zcr

@@ -61,7 +61,8 @@ def app_sst(
         energy_threshold=2000, 
         silence_frames_threshold=25,
         use_dynamic_threshold=True,
-        sensitivity=1.0
+        sensitivity=1.0,
+        max_chunk_duration=5.0  # New parameter for max chunk duration in seconds
         ):
     # Queues for asynchronous processing
     transcription_queue = queue.Queue()
@@ -145,6 +146,7 @@ def app_sst(
     sound_chunk = pydub.AudioSegment.empty()
     silence_frames = 0
     silence_start_time = None
+    chunk_start_time = time.time()  # Track when the current chunk started
 
     last_update_time = time.time()
 
@@ -153,7 +155,7 @@ def app_sst(
     exit_silence_threshold_factor = 1.2 * sensitivity   # Higher to exit silence state
 
     min_silence_duration = 0.2 / sensitivity  # seconds, adjusted by sensitivity (shortened for shorter sentences)
-    max_silence_duration = 0.5 * sensitivity  # seconds, adjusted by sensitivity (shortened for sensitivity)
+    max_silence_duration = 0.5 * sensitivity  # seconds, adjusted for sensitivity (shortened for sensitivity)
 
     while True:
         if webrtc_ctx.audio_receiver:
@@ -194,6 +196,7 @@ def app_sst(
                     silence_start_time = None
 
             current_time = time.time()
+            chunk_duration = current_time - chunk_start_time
 
             # Check if we've been in silence long enough
             silence_duration_condition = False
@@ -204,15 +207,17 @@ def app_sst(
                     (silence_duration <= max_silence_duration or silence_frames >= silence_frames_threshold)
                 )
 
-            # Process chunk if silence detected with duration constraints
-            if silence_frames >= silence_frames_threshold and silence_duration_condition:
+            # Process chunk if silence detected with duration constraints or max chunk duration reached
+            if (silence_frames >= silence_frames_threshold and silence_duration_condition) or \
+               (chunk_duration >= max_chunk_duration and len(sound_chunk) >= 1000):
                 if len(sound_chunk) > 0 and (current_time - last_transcription_time[0]) >= min_time_between_transcriptions:
-                    if len(sound_chunk) >= 1000:  # Minimum 1 second of audio
-                        transcription_queue.put(sound_chunk)
-                        last_transcription_time[0] = current_time
+                    transcription_queue.put(sound_chunk)
+                    last_transcription_time[0] = current_time
+                    # Reset chunk tracking
                     sound_chunk = pydub.AudioSegment.empty()
                     silence_frames = 0
                     silence_start_time = None
+                    chunk_start_time = current_time  # Reset the chunk timer
 
             # Process results from worker threads and buffer them
             while not result_queue.empty():
