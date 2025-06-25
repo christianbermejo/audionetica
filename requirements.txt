@@ -1,11 +1,9 @@
 pyaudio
 torch==2.2.2
-transformers
-gtts
+transformers==4.41.0
 pydub
-numpy==1.26.0
-SpeechRecognition
-sentencepiece
-sacremoses
-protobuf
+numpy==1.26.4
 streamlit_webrtc
+coqui-tts
+SentencePiece
+hangul-romanize

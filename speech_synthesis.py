@@ -1,17 +1,17 @@
-from gtts import gTTS
-from pydub import AudioSegment
-import pyaudio
-import wave
-import io
+import torch
 import tempfile
 import threading
 import queue
-import re
+import wave
+import pyaudio
+from pydub import AudioSegment
+from TTS.api import TTS
 
 def segment_text(text, max_segment_length=100):
     """
     Break text into segments at sentence boundaries or by length.
     """
+    import re
     # Split by sentence terminators
     sentence_endings = re.compile(r'([.!?])')
     sentences = []
@@ -52,32 +52,57 @@ class SpeechSynthesizer:
         self.audio_queue = queue.Queue()
         self.is_playing = False
         self.playback_thread = None
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    def synthesize_speech(self, text, lang="ko"):
-        """Convert text to speech using gTTS and return a pydub AudioSegment"""
-        tts = gTTS(text=text, lang=lang, slow=False)
-        mp3_fp = io.BytesIO()
-        tts.write_to_fp(mp3_fp)
-        mp3_fp.seek(0)
-        audio = AudioSegment.from_mp3(mp3_fp)
+        # Map language codes to Coqui TTS model names or paths
+        # These models should be installed or available in the environment
+        self.voice_presets = {
+            "en": "tts_models/en/ljspeech/tacotron2-DDC",
+            "ko": "tts_models/multilingual/multi-dataset/xtts_v2",
+        }
+        self.default_voice = "tts_models/en/ljspeech/tacotron2-DDC"
+        self.tts_models = {}
+        self.voice_history = {}
+
+    def get_tts_model(self, lang="en"):
+        if lang in self.tts_models:
+            return self.tts_models[lang]
+        
+        model_name = self.voice_presets.get(lang, self.default_voice)
+        try:
+            tts = TTS(model_name)
+        except TypeError as e:
+            print(f"First initialization attempt failed: {e}")
+            try:
+                tts = TTS(model_path=model_name)
+            except Exception as e2:
+                print(f"Second initialization attempt failed: {e2}")
+                print("Falling back to default initialization")
+                tts = TTS()
+        self.tts_models[lang] = tts
+        return tts
+
+    def synthesize_speech(self, text, lang="en"):
+        tts = self.get_tts_model(lang)
+        # Coqui TTS can synthesize directly to a numpy array or save to file
+        # We'll synthesize to a temporary wav file and load it with pydub for playback
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as f:
+            tts.tts_to_file(text=text, file_path=f.name, language="ko", speaker="Daisy Studious")
+            audio = AudioSegment.from_wav(f.name)
         return audio
 
-    def synthesize_speech_segment(self, text, lang="ko"):
-        """Convert a text segment to speech using gTTS"""
+    def synthesize_speech_segment(self, text, lang="en"):
         return self.synthesize_speech(text, lang)
 
-    def synthesize_speech_streaming(self, text, lang="ko"):
-        """Break text into segments and synthesize/play each segment as soon as ready"""
+    def synthesize_speech_streaming(self, text, lang="en"):
         segments = segment_text(text)
         for segment in segments:
             audio = self.synthesize_speech_segment(segment, lang)
             self.audio_queue.put(audio)
-        # Start playback if not already playing
         if not self.is_playing:
             self.start_playback()
 
     def start_playback(self):
-        """Start a thread to play audio segments as they become available"""
         if self.playback_thread is None or not self.playback_thread.is_alive():
             self.is_playing = True
             self.playback_thread = threading.Thread(target=self._playback_worker)
@@ -85,10 +110,9 @@ class SpeechSynthesizer:
             self.playback_thread.start()
 
     def _playback_worker(self):
-        """Worker thread that plays audio segments from the queue"""
         while True:
             try:
-                audio = self.audio_queue.get(timeout=5)  # Wait up to 5 seconds for new audio
+                audio = self.audio_queue.get(timeout=5)
                 self.play_audio(audio)
                 self.audio_queue.task_done()
             except queue.Empty:
@@ -96,15 +120,14 @@ class SpeechSynthesizer:
                 break
 
     def play_audio(self, audio):
-        """Play a pydub AudioSegment through speakers using PyAudio"""
-        with tempfile.NamedTemporaryFile(suffix='.wav') as f:
+        with tempfile.NamedTemporaryFile(suffix=".wav") as f:
             audio.export(f.name, format="wav")
-            wf = wave.open(f.name, 'rb')
+            wf = wave.open(f.name, "rb")
             stream = self.p.open(
                 format=self.p.get_format_from_width(wf.getsampwidth()),
                 channels=wf.getnchannels(),
                 rate=wf.getframerate(),
-                output=True
+                output=True,
             )
             chunk_size = 1024
             data = wf.readframes(chunk_size)
