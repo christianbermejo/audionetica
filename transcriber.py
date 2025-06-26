@@ -177,3 +177,60 @@ class Transcriber:
         )
         sound_chunk += sound
         return sound_chunk
+
+    def create_fixed_length_chunks(self, audio_segment, chunk_length_ms=5000, overlap_ms=500):
+        """
+        Split an audio segment into fixed-length chunks with overlap.
+
+        Args:
+            audio_segment: The pydub AudioSegment to chunk
+            chunk_length_ms: Length of each chunk in milliseconds
+            overlap_ms: Overlap between chunks in milliseconds
+
+        Returns:
+            List of pydub AudioSegment chunks
+        """
+        chunks = []
+        segment_length = len(audio_segment)
+
+        # No chunking needed if audio is shorter than chunk length
+        if segment_length <= chunk_length_ms:
+            return [audio_segment]
+
+        # Create overlapping chunks
+        start = 0
+        while start < segment_length:
+            end = min(start + chunk_length_ms, segment_length)
+            chunks.append(audio_segment[start:end])
+            start = start + chunk_length_ms - overlap_ms
+
+        return chunks
+
+    def transcribe_with_chunking(self, audio_segment, chunk_length_ms=5000, overlap_ms=500):
+        """
+        Transcribe audio using fixed-length chunking with overlap.
+
+        Args:
+            audio_segment: The pydub AudioSegment to transcribe
+            chunk_length_ms: Length of each chunk in milliseconds
+            overlap_ms: Overlap between chunks in milliseconds
+
+        Returns:
+            Combined transcription text
+        """
+        chunks = self.create_fixed_length_chunks(audio_segment, chunk_length_ms, overlap_ms)
+
+        # If only one chunk, just transcribe it directly
+        if len(chunks) <= 1:
+            return self.transcribe(audio_segment)
+
+        # Transcribe each chunk
+        transcriptions = []
+        for chunk in chunks:
+            if len(chunk) > 500:  # Only process chunks with meaningful content
+                transcription = self.transcribe(chunk)
+                if transcription.strip():
+                    transcriptions.append(transcription)
+
+        # Combine transcriptions (simple concatenation for now)
+        return " ".join(transcriptions)

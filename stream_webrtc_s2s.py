@@ -62,7 +62,10 @@ def app_sst(
         silence_frames_threshold=25,
         use_dynamic_threshold=True,
         sensitivity=1.0,
-        max_chunk_duration=5.0  # New parameter for max chunk duration in seconds
+        max_chunk_duration=5.0,  # New parameter for max chunk duration in seconds
+        use_fixed_length_chunking=True,  # Enable fixed-length chunking
+        chunk_length_ms=5000,  # Length of each chunk in milliseconds
+        overlap_ms=500  # Overlap between chunks in milliseconds
         ):
     # Queues for asynchronous processing
     transcription_queue = queue.Queue()
@@ -94,7 +97,11 @@ def app_sst(
             if len(audio_chunk) < 1000:
                 transcription_queue.task_done()
                 continue
-            text = transcriber.transcribe(audio_chunk)
+            # Use fixed-length chunking if enabled and chunk is large enough
+            if use_fixed_length_chunking and len(audio_chunk) > chunk_length_ms:
+                text = transcriber.transcribe_with_chunking(audio_chunk, chunk_length_ms, overlap_ms)
+            else:
+                text = transcriber.transcribe(audio_chunk)
             # Only process meaningful content (more than 5 characters)
             if len(text.strip()) > 5:
                 timestamp = time.strftime("%H:%M:%S")
@@ -306,10 +313,11 @@ def main():
     if "current_translation" not in st.session_state:
         st.session_state.current_translation = ""
 
+    # Add UI controls for fixed-length chunking settings
     with st.popover("Settings"):
         col_speech, col_clear = st.columns(2, vertical_alignment="center")
         with col_speech:
-            enable_speech = st.checkbox("Enable Speech Synthesis", value=True)
+            enable_speech = st.checkbox("Enable Speech Synthesis", value=True, key="speech")
         with col_clear:
             if st.button("Clear History"):
                 st.session_state.transcriptions = []
@@ -317,6 +325,14 @@ def main():
                 st.session_state.current_transcription = ""
                 st.session_state.current_translation = ""
                 st.rerun()
+
+        st.subheader("Audio Chunking Settings")
+        use_fixed_length_chunking = st.checkbox("Use Fixed-Length Chunking", value=True, key="chunk")
+        col1, col2 = st.columns(2)
+        with col1:
+            chunk_length_ms = st.slider("Chunk Length (ms)", 1000, 10000, 5000, 500)
+        with col2:
+            overlap_ms = st.slider("Overlap (ms)", 0, 2000, 500, 100)
 
     status_indicator = st.empty()
 
@@ -332,7 +348,14 @@ def main():
     # Initial UI update
     update_ui(text_container, translation_container)
 
-    app_sst(transcriber, translator, synthesizer, status_indicator, text_container, translation_container, download_container, enable_speech=enable_speech)
+    app_sst(
+        transcriber, translator, synthesizer, 
+        status_indicator, text_container, translation_container, download_container, 
+        enable_speech=enable_speech,
+        use_fixed_length_chunking=use_fixed_length_chunking,
+        chunk_length_ms=chunk_length_ms,
+        overlap_ms=overlap_ms
+    )
 
 if __name__ == "__main__":
     main()
