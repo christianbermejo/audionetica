@@ -64,11 +64,11 @@ def app_sst(
         sensitivity=1.0,
         max_chunk_duration=5.0  # New parameter for max chunk duration in seconds
         ):
-    # Queues for asynchronous processing
-    transcription_queue = queue.Queue()
-    translation_queue = queue.Queue()
-    synthesis_queue = queue.Queue()
-    result_queue = queue.Queue()  # For passing results to main thread
+    # Queues for asynchronous processing with bounded sizes
+    transcription_queue = queue.Queue(maxsize=50)
+    translation_queue = queue.Queue(maxsize=50)
+    synthesis_queue = queue.Queue(maxsize=50)
+    result_queue = queue.Queue(maxsize=100)  # For passing results to main thread
 
     # Debounce and duplicate detection state
     last_transcription_time = [0]  # Use list for mutability in nested function
@@ -86,44 +86,71 @@ def app_sst(
 
     # Worker thread for transcription
     def transcription_worker():
-        while True:
-            audio_chunk = transcription_queue.get()
-            if audio_chunk is None:
-                break
-            # Only process if audio chunk is at least 1 second
-            if len(audio_chunk) < 1000:
-                transcription_queue.task_done()
-                continue
-            text = transcriber.transcribe(audio_chunk)
-            # Only process meaningful content (more than 5 characters)
-            if len(text.strip()) > 5:
-                timestamp = time.strftime("%H:%M:%S")
-                result_queue.put(("transcription", timestamp, text))
-                translation_queue.put((text, timestamp))
+        try:
+            while True:
+                try:
+                    audio_chunk = transcription_queue.get(timeout=5)
+                    if audio_chunk is None:
+                        break
+                    # Only process if audio chunk is at least 1 second
+                    if len(audio_chunk) < 1000:
+                        transcription_queue.task_done()
+                        continue
+                    text = transcriber.transcribe(audio_chunk)
+                    # Only process meaningful content (more than 5 characters)
+                    if len(text.strip()) > 5:
+                        timestamp = time.strftime("%H:%M:%S")
+                        result_queue.put(("transcription", timestamp, text))
+                        translation_queue.put((text, timestamp))
+                    transcription_queue.task_done()
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    st.error(f"Transcription error: {e}")
+                    transcription_queue.task_done()
+        finally:
             transcription_queue.task_done()
 
     # Worker thread for translation
     def translation_worker():
-        while True:
-            item = translation_queue.get()
-            if item is None:
-                break
-            text, timestamp = item
-            translated_text = translator.translate(text)
-            if translated_text.strip():
-                result_queue.put(("translation", timestamp, translated_text))
-                if enable_speech:
-                    synthesis_queue.put(translated_text)
+        try:
+            while True:
+                try:
+                    item = translation_queue.get(timeout=5)
+                    if item is None:
+                        break
+                    text, timestamp = item
+                    translated_text = translator.translate(text)
+                    if translated_text.strip():
+                        result_queue.put(("translation", timestamp, translated_text))
+                        if enable_speech:
+                            synthesis_queue.put(translated_text)
+                    translation_queue.task_done()
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    st.error(f"Translation error: {e}")
+                    translation_queue.task_done()
+        finally:
             translation_queue.task_done()
 
     # Worker thread for speech synthesis
     def synthesis_worker():
-        while True:
-            translated_text = synthesis_queue.get()
-            if translated_text is None:
-                break
-            audio = synthesizer.synthesize_speech(translated_text, lang="ko")
-            synthesizer.play_audio(audio)
+        try:
+            while True:
+                try:
+                    translated_text = synthesis_queue.get(timeout=5)
+                    if translated_text is None:
+                        break
+                    audio = synthesizer.synthesize_speech(translated_text, lang="ko")
+                    synthesizer.play_audio(audio)
+                    synthesis_queue.task_done()
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    st.error(f"Synthesis error: {e}")
+                    synthesis_queue.task_done()
+        finally:
             synthesis_queue.task_done()
 
     # Start worker threads
@@ -267,9 +294,29 @@ def app_sst(
     transcription_queue.put(None)
     translation_queue.put(None)
     synthesis_queue.put(None)
-    transcription_thread.join(timeout=1)
-    translation_thread.join(timeout=1)
-    synthesis_thread.join(timeout=1)
+    transcription_thread.join(timeout=2)
+    translation_thread.join(timeout=2)
+    synthesis_thread.join(timeout=2)
+
+    # Clear any remaining items in queues to prevent memory leaks
+    while not transcription_queue.empty():
+        try:
+            transcription_queue.get_nowait()
+            transcription_queue.task_done()
+        except queue.Empty:
+            break
+    while not translation_queue.empty():
+        try:
+            translation_queue.get_nowait()
+            translation_queue.task_done()
+        except queue.Empty:
+            break
+    while not synthesis_queue.empty():
+        try:
+            synthesis_queue.get_nowait()
+            synthesis_queue.task_done()
+        except queue.Empty:
+            break
 
     # Update download section when stream is stopped and there are transcriptions
     if not webrtc_ctx.audio_receiver and st.session_state.transcriptions:

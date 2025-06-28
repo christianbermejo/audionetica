@@ -6,14 +6,20 @@ from pydub import AudioSegment
 import pydub
 import time
 
+import torch
+
 class Transcriber:
-    def __init__(self, language="English", task="transcribe"):
+    def __init__(self, language="English", task="transcribe", max_history=100):
         self.language = language
         self.task = task
         self.model, self.processor = self.load_whisper_model_and_processor()
         self._energy_history = []
         self._current_dynamic_threshold = 2000  # Initial default threshold
         self._smoothed_energy = None
+        self._max_history = max_history  # Configurable max history size
+
+    def __del__(self):
+        self.cleanup()
 
     def load_whisper_model_and_processor(self):
         """
@@ -22,6 +28,15 @@ class Transcriber:
         processor = WhisperProcessor.from_pretrained("openai/whisper-small")
         model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-small")
         return model, processor
+
+    def cleanup(self):
+        """Clean up resources to help garbage collection"""
+        self._energy_history.clear()
+        self._smoothed_energy = None
+        self.model = None
+        self.processor = None
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def save_audio(self, audio_segment: AudioSegment, base_filename: str) -> None:
         """
@@ -74,9 +89,9 @@ class Transcriber:
             energy = self.frame_energy(frame)
             self._energy_history.append(energy)
 
-        # Keep only recent history (last 100 frames)
-        if len(self._energy_history) > 100:
-            self._energy_history = self._energy_history[-100:]
+        # Keep only recent history (last max_history frames)
+        if len(self._energy_history) > self._max_history:
+            self._energy_history = self._energy_history[-self._max_history:]
 
         if self._energy_history:
             ambient_energy = np.percentile(self._energy_history, 30)  # 30th percentile as baseline

@@ -46,12 +46,18 @@ def segment_text(text, max_segment_length=100):
                 segments.append(sentence)
     return segments
 
+import os
+
 class SpeechSynthesizer:
     def __init__(self):
         self.p = pyaudio.PyAudio()
-        self.audio_queue = queue.Queue()
+        self.audio_queue = queue.Queue(maxsize=100)  # Limit queue size to prevent memory issues
         self.is_playing = False
         self.playback_thread = None
+        self._temp_files = []  # Track temporary files
+
+    def __del__(self):
+        self.close()
 
     def synthesize_speech(self, text, lang="ko"):
         """Convert text to speech using gTTS and return a pydub AudioSegment"""
@@ -97,9 +103,11 @@ class SpeechSynthesizer:
 
     def play_audio(self, audio):
         """Play a pydub AudioSegment through speakers using PyAudio"""
-        with tempfile.NamedTemporaryFile(suffix='.wav') as f:
-            audio.export(f.name, format="wav")
-            wf = wave.open(f.name, 'rb')
+        temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+        self._temp_files.append(temp_file.name)
+        try:
+            audio.export(temp_file.name, format="wav")
+            wf = wave.open(temp_file.name, 'rb')
             stream = self.p.open(
                 format=self.p.get_format_from_width(wf.getsampwidth()),
                 channels=wf.getnchannels(),
@@ -113,6 +121,21 @@ class SpeechSynthesizer:
                 data = wf.readframes(chunk_size)
             stream.stop_stream()
             stream.close()
+            wf.close()
+        finally:
+            if os.path.exists(temp_file.name):
+                os.unlink(temp_file.name)
+                self._temp_files.remove(temp_file.name)
 
     def close(self):
-        self.p.terminate()
+        if hasattr(self, 'p') and self.p:
+            self.p.terminate()
+            self.p = None
+        # Clean up any remaining temp files
+        for temp_file in self._temp_files[:]:
+            if os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                    self._temp_files.remove(temp_file)
+                except (OSError, IOError):
+                    pass
