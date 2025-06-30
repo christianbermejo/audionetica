@@ -26,15 +26,16 @@ def load_translator():
 def load_speech_synthesizer():
     return SpeechSynthesizer()
 
-def update_ui(text_container, translation_container):
-    with text_container.container():
-        st.markdown("### Transcribed Text (English)")
-        for t in st.session_state.transcriptions:
-            st.markdown(f"- {t}")
-    with translation_container.container():
-        st.markdown("### Translated Text (Korean)")
-        for t in st.session_state.translations:
-            st.markdown(f"- {t}")
+def update_ui(force_full_update=False):
+    # Render all transcriptions as a single markdown block
+    transcription_content = "\n".join([f"- {t}" for t in st.session_state.transcriptions])
+    st.session_state.text_placeholder.markdown(transcription_content)
+    st.session_state.last_displayed_transcription_index = len(st.session_state.transcriptions)
+
+    # Render all translations as a single markdown block
+    translation_content = "\n".join([f"- {t}" for t in st.session_state.translations])
+    st.session_state.translation_placeholder.markdown(translation_content)
+    st.session_state.last_displayed_translation_index = len(st.session_state.translations)
 
 def create_download_content(transcriptions_list, include_timestamps=True):
     if include_timestamps:
@@ -53,8 +54,6 @@ def app_sst(
         translator,
         synthesizer,
         status_indicator,
-        text_container,
-        translation_container,
         download_container,
         enable_speech=True,
         timeout=1, 
@@ -275,7 +274,7 @@ def app_sst(
                 transcription_buffer.clear()
                 translation_buffer.clear()
                 # Update UI
-                update_ui(text_container, translation_container)
+                update_ui()
                 last_session_update_time = current_time
 
         else:
@@ -283,6 +282,8 @@ def app_sst(
             if len(sound_chunk) > 0:
                 transcription_queue.put(sound_chunk)
                 sound_chunk = pydub.AudioSegment.empty()
+            # Force a full update of the UI to ensure all transcriptions are displayed
+            update_ui(force_full_update=True)
             break
 
     # Wait for all processing to finish
@@ -352,6 +353,10 @@ def main():
         st.session_state.current_transcription = ""
     if "current_translation" not in st.session_state:
         st.session_state.current_translation = ""
+    if "last_displayed_transcription_index" not in st.session_state:
+        st.session_state.last_displayed_transcription_index = 0
+    if "last_displayed_translation_index" not in st.session_state:
+        st.session_state.last_displayed_translation_index = 0
 
     with st.popover("Settings"):
         col_speech, col_clear = st.columns(2, vertical_alignment="center")
@@ -363,23 +368,36 @@ def main():
                 st.session_state.translations = []
                 st.session_state.current_transcription = ""
                 st.session_state.current_translation = ""
+                st.session_state.last_displayed_transcription_index = 0
+                st.session_state.last_displayed_translation_index = 0
                 st.rerun()
 
     status_indicator = st.empty()
 
-    # Create empty containers for transcription and translation
-    text_container = st.empty()
-    translation_container = st.empty()
+    # Create two columns for transcription and translation, and static headers
+    text_col, translation_col = st.columns(2)
+    with text_col:
+        st.markdown("### Transcribed Text (English)")
+    with translation_col:
+        st.markdown("### Translated Text (Korean)")
     download_container = st.container()
+
+    # Create placeholders for content
+    text_placeholder = text_col.empty()
+    translation_placeholder = translation_col.empty()
+
+    # Store placeholders in session state for access in app_sst and update_ui
+    st.session_state.text_placeholder = text_placeholder
+    st.session_state.translation_placeholder = translation_placeholder
 
     transcriber = load_transcriber()
     translator = load_translator()
     synthesizer = load_speech_synthesizer()
 
-    # Initial UI update
-    update_ui(text_container, translation_container)
+    # Initial UI update - force full update to show any existing transcriptions
+    update_ui(force_full_update=True)
 
-    app_sst(transcriber, translator, synthesizer, status_indicator, text_container, translation_container, download_container, enable_speech=enable_speech)
+    app_sst(transcriber, translator, synthesizer, status_indicator, download_container, enable_speech=enable_speech)
 
 if __name__ == "__main__":
     main()
