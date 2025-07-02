@@ -29,7 +29,9 @@ You can install `ffmpeg` and `portaudio` using your preferred package manager, b
 
 ## Installation
 
-1. Ensure Python 3.10 is installed.
+Optional: Install [pyenv](https://github.com/pyenv/pyenv) and [pyenv-virtualenv](https://github.com/pyenv/pyenv-virtualenv) for easier Python version management
+
+1. Ensure Python 3.10.18 is installed.
 
 2. Install the required Python packages:
 
@@ -59,6 +61,29 @@ This starts a local Streamlit server on `localhost` and immediately opens it on 
 -  `translator.py` - HuggingFace translation helper
 
 -  `speech_synthesis.py` - gTTS based speech generation and playback
+
+## Troubleshooting
+
+### Queue Overflow
+- This refers to the length of the queue size to receive input audio frames asynchronously. This can be temporarily remedied by increasing the `audio_receiver_size` in the `webrtc_ctx` object, or by restarting the application
+- Note that increasing the `audio_receiver_size` might also impact processing times in transcription.
+
+### Internal PortAudio Error
+- This refers to the `portaudio` library failing during the runtime. Impacts audio output (aka no audio will play). Restart the application.
+
+### Attention Mask
+`The attention mask is not set and cannot be inferred from input because pad token is same as eos token. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.`
+
+- This is normal behavior. Related to [this](https://github.com/huggingface/transformers/issues/33498).
+
+### Transcribe-Decoder Conflict
+`You have passed task=transcribe, but also have set forced_decoder_ids to [[1, None], [2, 50359]] which creates a conflict. forced_decoder_ids will be ignored in favor of task=transcribe.`
+
+- This can be ignored. Related to [this](https://github.com/openai/whisper/discussions/2094#discussioncomment-8852914)
+
+### Other Errors
+- Restart it.
+
 
 ## License
 
